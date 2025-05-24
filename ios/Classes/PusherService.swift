@@ -150,7 +150,7 @@ class PusherService: MChannel {
     guard let args = call.arguments as? [String: String],
           let channelName = args["channelName"],
           let eventName = args["eventName"],
-          let pusher = _pusherInstance else {
+          let pusher = pusher else {
         result(FlutterError(code: "BIND_ERROR", message: "Invalid arguments or uninitialized Pusher", details: nil))
         return
     }
@@ -174,7 +174,7 @@ class PusherService: MChannel {
     guard let args = call.arguments as? [String: String],
           let channelName = args["channelName"],
           let eventName = args["eventName"],
-          let pusher = _pusherInstance else {
+          let pusher = pusher else {
         result(FlutterError(code: "UNBIND_ERROR", message: "Invalid arguments or uninitialized Pusher", details: nil))
         return
     }
