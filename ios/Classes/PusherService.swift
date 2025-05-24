@@ -146,40 +146,58 @@ class PusherService: MChannel {
         result(nil)
     }
 
-    private func bind(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: String], let channelName = args["channelName"], let eventName = args["eventName"] else {
-            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing binding arguments", details: nil))
-            return
-        }
-
-        let channel: PusherChannel = channelName.hasPrefix(Self.PRESENCE_PREFIX)
-            ? pusher.connection.channels.findPresence(name: channelName)!
-            : pusher.connection.channels.find(name: channelName)!
-
-        let callbackId = channel.bind(eventName: eventName, eventCallback: ChannelEventListener.default.onEvent)
-        bindedEvents[channelName + eventName] = callbackId
-
-        Logger.debug("[BIND] \(eventName)")
-        result(nil)
+   private func bind(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: String],
+          let channelName = args["channelName"],
+          let eventName = args["eventName"],
+          let pusher = _pusherInstance else {
+        result(FlutterError(code: "BIND_ERROR", message: "Invalid arguments or uninitialized Pusher", details: nil))
+        return
     }
+
+    guard let channel = channelName.hasPrefix(Self.PRESENCE_PREFIX)
+        ? pusher.connection.channels.findPresence(name: channelName)
+        : pusher.connection.channels.find(name: channelName) else {
+        Utils.errorLog(msg: "Channel '\(channelName)' not found when trying to bind event")
+        result(FlutterError(code: "BIND_ERROR", message: "Channel not found: \(channelName)", details: nil))
+        return
+    }
+
+    let callbackId = channel.bind(eventName: eventName, eventCallback: ChannelEventListener.default.onEvent)
+    bindedEvents[channelName + eventName] = callbackId
+
+    Utils.debugLog(msg: "Bound \(eventName) on \(channelName)")
+    result(nil)
+}
 
     private func unbind(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: String],
-              let channelName = args["channelName"],
-              let eventName = args["eventName"],
-              let callbackId = bindedEvents[channelName + eventName] else {
-            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing unbind arguments", details: nil))
-            return
-        }
-
-        let channel: PusherChannel = channelName.hasPrefix(Self.PRESENCE_PREFIX)
-            ? pusher.connection.channels.findPresence(name: channelName)!
-            : pusher.connection.channels.find(name: channelName)!
-
-        channel.unbind(eventName: eventName, callbackId: callbackId)
-        Logger.debug("[UNBIND] \(eventName)")
-        result(nil)
+    guard let args = call.arguments as? [String: String],
+          let channelName = args["channelName"],
+          let eventName = args["eventName"],
+          let pusher = _pusherInstance else {
+        result(FlutterError(code: "UNBIND_ERROR", message: "Invalid arguments or uninitialized Pusher", details: nil))
+        return
     }
+
+    guard let callbackId = bindedEvents[channelName + eventName] else {
+        result(FlutterError(code: "UNBIND_ERROR", message: "Callback not found for \(channelName)::\(eventName)", details: nil))
+        return
+    }
+
+    let channel: PusherChannel? = channelName.hasPrefix(Self.PRESENCE_PREFIX)
+        ? pusher.connection.channels.findPresence(name: channelName)
+        : pusher.connection.channels.find(name: channelName)
+
+    guard let safeChannel = channel else {
+        Utils.errorLog(msg: "Channel '\(channelName)' not found during unbind")
+        result(FlutterError(code: "UNBIND_ERROR", message: "Channel not found: \(channelName)", details: nil))
+        return
+    }
+
+    safeChannel.unbind(eventName: eventName, callbackId: callbackId)
+    bindedEvents.removeValue(forKey: channelName + eventName)
+    result(nil)
+}
 
     private func trigger(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let json = call.arguments as? String else {
