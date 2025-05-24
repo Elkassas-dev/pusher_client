@@ -19,6 +19,20 @@ class PusherService: MChannel {
     private var pusher: Pusher!
     private var bindedEvents = [String: String]()
 
+     struct Utils {
+        static var enableLogging = true
+        static func debugLog(msg: String) {
+            if(enableLogging) {
+                debugPrint("D/\(PusherService.LOG_TAG): \(msg)")
+            }
+        }
+        static func errorLog(msg: String) {
+            if(enableLogging) {
+                debugPrint("E/\(PusherService.LOG_TAG): \(msg)")
+            }
+        }
+    }
+
     struct Logger {
         static var isEnabled = true
 
