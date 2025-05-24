@@ -15,207 +15,190 @@ class PusherService: MChannel {
     static let PRIVATE_PREFIX = "private-"
     static let PRIVATE_ENCRYPTED_PREFIX = "private-encrypted-"
     static let PRESENCE_PREFIX = "presence-"
-    
-    private var _pusherInstance: Pusher!
-    private var bindedEvents = Dictionary<String, String>()
-    
-    struct Utils {
-        static var enableLogging = true
-        static func debugLog(msg: String) {
-            if(enableLogging) {
-                debugPrint("D/\(PusherService.LOG_TAG): \(msg)")
-            }
+
+    private var pusher: Pusher!
+    private var bindedEvents = [String: String]()
+
+    struct Logger {
+        static var isEnabled = true
+
+        static func debug(_ message: String) {
+            guard isEnabled else { return }
+            debugPrint("D/\(LOG_TAG): \(message)")
         }
-        static func errorLog(msg: String) {
-            if(enableLogging) {
-                debugPrint("E/\(PusherService.LOG_TAG): \(msg)")
-            }
+
+        static func error(_ message: String) {
+            guard isEnabled else { return }
+            debugPrint("E/\(LOG_TAG): \(message)")
         }
     }
-    
+
     func register(messenger: FlutterBinaryMessenger) {
-        let methodChannel = FlutterMethodChannel(name: PusherService.CHANNEL_NAME, binaryMessenger: messenger)
-        
-        methodChannel.setMethodCallHandler { (_ call:FlutterMethodCall, result:@escaping FlutterResult) in
-            switch call.method {
-            case "init":
-                self.`init`(call, result: result)
-            case "connect":
-                self.connect(result: result)
-            case "disconnect":
-                self.disconnect(result: result)
-            case "getSocketId":
-                self.getSocketId(result: result)
-            case "subscribe":
-                self.subscribe(call, result: result)
-            case "unsubscribe":
-                self.unsubscribe(call, result: result)
-            case "bind":
-                self.bind(call, result: result)
-            case "unbind":
-                self.unbind(call, result: result)
-            case "trigger":
-                self.trigger(call, result: result)
-            default:
-                result(FlutterMethodNotImplemented)
-            }
-        }
-        
-        let eventChannel = FlutterEventChannel(name: PusherService.EVENT_STREAM, binaryMessenger: messenger)
-        
+        let methodChannel = FlutterMethodChannel(name: Self.CHANNEL_NAME, binaryMessenger: messenger)
+        methodChannel.setMethodCallHandler(handleMethodCall(_:result:))
+
+        let eventChannel = FlutterEventChannel(name: Self.EVENT_STREAM, binaryMessenger: messenger)
         eventChannel.setStreamHandler(StreamHandler.default)
     }
-    
-    func `init`(_ call:FlutterMethodCall, result:@escaping FlutterResult) {
+
+    private func handleMethodCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        switch call.method {
+        case "init": initialize(call, result: result)
+        case "connect": connect(result: result)
+        case "disconnect": disconnect(result: result)
+        case "getSocketId": result(pusher.connection.socketId)
+        case "subscribe": subscribe(call, result: result)
+        case "unsubscribe": unsubscribe(call, result: result)
+        case "bind": bind(call, result: result)
+        case "unbind": unbind(call, result: result)
+        case "trigger": trigger(call, result: result)
+        default: result(FlutterMethodNotImplemented)
+        }
+    }
+
+    private func initialize(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let json = call.arguments as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Expected a JSON string", details: nil))
+            return
+        }
+
         do {
-            let json = call.arguments as! String
-            let pusherArgs: PusherArgs = try JSONDecoder().decode(PusherArgs.self, from: json.data(using: .utf8)!)
-            
-            Utils.enableLogging = pusherArgs.initArgs.enableLogging
-            
-            if(_pusherInstance == nil) {
-                let pusherOptions = PusherClientOptions(
-                    authMethod: pusherArgs.pusherOptions.auth == nil ? .noMethod : AuthMethod.authRequestBuilder(authRequestBuilder: AuthRequestBuilder(pusherAuth: pusherArgs.pusherOptions.auth!)),
-                    host: pusherArgs.pusherOptions.cluster != nil ? .cluster(pusherArgs.pusherOptions.cluster!) : .host(pusherArgs.pusherOptions.host),
-                    port: pusherArgs.pusherOptions.encrypted ? pusherArgs.pusherOptions.wssPort : pusherArgs.pusherOptions.wsPort,
-                    useTLS: pusherArgs.pusherOptions.encrypted,
-                    activityTimeout: Double(pusherArgs.pusherOptions.activityTimeout) / 1000
-                    
-                )
-                
-                _pusherInstance = Pusher(key: pusherArgs.appKey, options: pusherOptions)
-                _pusherInstance.connection.reconnectAttemptsMax = pusherArgs.pusherOptions.maxReconnectionAttempts
-                _pusherInstance.connection.maxReconnectGapInSeconds = Double(pusherArgs.pusherOptions.maxReconnectGapInSeconds)
-                _pusherInstance.connection.pongResponseTimeoutInterval = Double(pusherArgs.pusherOptions.pongTimeout) / 1000
-                _pusherInstance.connection.delegate = ConnectionListener.default
-                Utils.debugLog(msg: "Pusher initialized")
-                
-                result(nil)
-            }
-        } catch let err {
-            Utils.errorLog(msg: err.localizedDescription)
-            result(FlutterError(code: "INIT_ERROR", message: err.localizedDescription, details: err))
+            let args = try JSONDecoder().decode(PusherArgs.self, from: Data(json.utf8))
+            Logger.isEnabled = args.initArgs.enableLogging
+
+            guard pusher == nil else { return result(nil) }
+
+            let options = PusherClientOptions(
+                authMethod: args.pusherOptions.auth.map { AuthMethod.authRequestBuilder(authRequestBuilder: AuthRequestBuilder(pusherAuth: $0)) } ?? .noMethod,
+                host: args.pusherOptions.cluster.map { .cluster($0) } ?? .host(args.pusherOptions.host),
+                port: args.pusherOptions.encrypted ? args.pusherOptions.wssPort : args.pusherOptions.wsPort,
+                useTLS: args.pusherOptions.encrypted,
+                activityTimeout: Double(args.pusherOptions.activityTimeout) / 1000
+            )
+
+            pusher = Pusher(key: args.appKey, options: options)
+            pusher.connection.reconnectAttemptsMax = args.pusherOptions.maxReconnectionAttempts
+            pusher.connection.maxReconnectGapInSeconds = Double(args.pusherOptions.maxReconnectGapInSeconds)
+            pusher.connection.pongResponseTimeoutInterval = Double(args.pusherOptions.pongTimeout) / 1000
+            pusher.connection.delegate = ConnectionListener.default
+
+            Logger.debug("Pusher initialized")
+            result(nil)
+        } catch {
+            Logger.error(error.localizedDescription)
+            result(FlutterError(code: "INIT_ERROR", message: error.localizedDescription, details: error))
         }
-        
     }
-    
-    func connect(result:@escaping FlutterResult) {
-        _pusherInstance.connect()
+
+    private func connect(result: @escaping FlutterResult) {
+        pusher.connect()
         result(nil)
     }
-    
-    func disconnect(result:@escaping FlutterResult) {
-        _pusherInstance.disconnect()
-        Utils.debugLog(msg: "Disconnect")
+
+    private func disconnect(result: @escaping FlutterResult) {
+        pusher.disconnect()
+        Logger.debug("Disconnected")
         result(nil)
     }
-    
-    func getSocketId(result:@escaping FlutterResult) {
-        result(_pusherInstance.connection.socketId)
-    }
-    
-    func subscribe(_ call:FlutterMethodCall, result:@escaping FlutterResult) {
-        let channelMap = call.arguments as! [String: String]
-        let channelName: String = channelMap["channelName"]!
-        var channel: PusherChannel
-        
-        if(!channelName.starts(with: PusherService.PRESENCE_PREFIX)) {
-            channel = _pusherInstance.subscribe(channelName)
-        } else {
-            channel = _pusherInstance.subscribeToPresenceChannel(channelName: channelName)
-            for pEvent in Constants.PresenceEvents.allCases {
-                channel.bind(eventName: pEvent.rawValue, eventCallback: ChannelEventListener.default.onEvent)
-            }
+
+    private func subscribe(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: String], let channelName = args["channelName"] else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing channel name", details: nil))
+            return
         }
-        
-        for pEvent in Constants.Events.allCases {
-            channel.bind(eventName: pEvent.rawValue, eventCallback: ChannelEventListener.default.onEvent)
+
+        let channel: PusherChannel = channelName.hasPrefix(Self.PRESENCE_PREFIX)
+            ? pusher.subscribeToPresenceChannel(channelName: channelName)
+            : pusher.subscribe(channelName)
+
+        Constants.Events.allCases.forEach { channel.bind(eventName: $0.rawValue, eventCallback: ChannelEventListener.default.onEvent) }
+
+        if channelName.hasPrefix(Self.PRESENCE_PREFIX) {
+            Constants.PresenceEvents.allCases.forEach { channel.bind(eventName: $0.rawValue, eventCallback: ChannelEventListener.default.onEvent) }
         }
-        
-        Utils.debugLog(msg: "Subscribed: \(channelName)")
+
+        Logger.debug("Subscribed to \(channelName)")
         result(nil)
     }
-    
-    func unsubscribe(_ call:FlutterMethodCall, result:@escaping FlutterResult) {
-        let channelMap = call.arguments as! [String: String]
-        let channelName: String = channelMap["channelName"]!
-        
-        _pusherInstance.unsubscribe(channelName)
-        Utils.debugLog(msg: "Unsubscribed: \(channelName)")
-        
-        result(nil)
-    }
-    
-    /**
-     * Note binding can happen before the channel has been subscribed to
-     */
-    func bind(_ call:FlutterMethodCall, result:@escaping FlutterResult) {
-        let map = call.arguments as! [String: String]
-        let channelName: String = map["channelName"]!
-        let eventName: String = map["eventName"]!
-        var channel: PusherChannel
-        
-        if(!channelName.starts(with: PusherService.PRESENCE_PREFIX)) {
-            channel = _pusherInstance.connection.channels.find(name: channelName)!
-            bindedEvents[channelName + eventName] = channel.bind(eventName: eventName, eventCallback: ChannelEventListener.default.onEvent)
-        } else {
-            channel = _pusherInstance.connection.channels.findPresence(name: channelName)!
-            bindedEvents[channelName + eventName] = channel.bind(eventName: eventName, eventCallback: ChannelEventListener.default.onEvent)
+
+    private func unsubscribe(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: String], let channelName = args["channelName"] else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing channel name", details: nil))
+            return
         }
-        
-        Utils.debugLog(msg: "[BIND] \(eventName)")
+
+        pusher.unsubscribe(channelName)
+        Logger.debug("Unsubscribed from \(channelName)")
         result(nil)
     }
-    
-    func unbind(_ call:FlutterMethodCall, result:@escaping FlutterResult) {
-        let map = call.arguments as! [String: String]
-        let channelName: String = map["channelName"]!
-        let eventName: String = map["eventName"]!
-        var channel: PusherChannel
-        let callBackId = bindedEvents[channelName + eventName]
-        
-        if(callBackId != nil) {
-            if(!channelName.starts(with: PusherService.PRESENCE_PREFIX)) {
-                channel = _pusherInstance.connection.channels.find(name: channelName)!
-                channel.unbind(eventName: eventName, callbackId: callBackId!)
-            } else {
-                channel = _pusherInstance.connection.channels.findPresence(name: channelName)!
-                channel.unbind(eventName: eventName, callbackId: callBackId!)
-            }
+
+    private func bind(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: String], let channelName = args["channelName"], let eventName = args["eventName"] else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing binding arguments", details: nil))
+            return
         }
-        
-        Utils.debugLog(msg: "[UNBIND] \(eventName)")
+
+        let channel: PusherChannel = channelName.hasPrefix(Self.PRESENCE_PREFIX)
+            ? pusher.connection.channels.findPresence(name: channelName)!
+            : pusher.connection.channels.find(name: channelName)!
+
+        let callbackId = channel.bind(eventName: eventName, eventCallback: ChannelEventListener.default.onEvent)
+        bindedEvents[channelName + eventName] = callbackId
+
+        Logger.debug("[BIND] \(eventName)")
         result(nil)
     }
-    
-    func trigger(_ call:FlutterMethodCall, result:@escaping FlutterResult) {
+
+    private func unbind(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: String],
+              let channelName = args["channelName"],
+              let eventName = args["eventName"],
+              let callbackId = bindedEvents[channelName + eventName] else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing unbind arguments", details: nil))
+            return
+        }
+
+        let channel: PusherChannel = channelName.hasPrefix(Self.PRESENCE_PREFIX)
+            ? pusher.connection.channels.findPresence(name: channelName)!
+            : pusher.connection.channels.find(name: channelName)!
+
+        channel.unbind(eventName: eventName, callbackId: callbackId)
+        Logger.debug("[UNBIND] \(eventName)")
+        result(nil)
+    }
+
+    private func trigger(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let json = call.arguments as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENTS", message: "Expected a JSON string", details: nil))
+            return
+        }
+
         do {
-            let json = call.arguments as! String
-            let clientEvent: ClientEvent = try JSONDecoder().decode(ClientEvent.self, from: json.data(using: .utf8)!)
+            let clientEvent = try JSONDecoder().decode(ClientEvent.self, from: Data(json.utf8))
             let channelName = clientEvent.channelName
             let eventName = clientEvent.eventName
-            let data: String = clientEvent.data ?? ""
-            let errorMessage = "Trigger can only be called on private and presence channels."
-            
-            switch clientEvent.channelName {
-            case _ where channelName.starts(with: PusherService.PRIVATE_ENCRYPTED_PREFIX):
-                result(FlutterError(code: "TRIGGER_ERROR", message: errorMessage, details: nil))
-            case _ where channelName.starts(with: PusherService.PRIVATE_PREFIX):
-                let channel: PusherChannel = _pusherInstance.connection.channels.find(name: channelName)!
-                channel.trigger(eventName: eventName, data: data)
-            case _ where channelName.starts(with: PusherService.PRESENCE_PREFIX):
-                let channel: PusherPresenceChannel = _pusherInstance.connection.channels.findPresence(name: channelName)!
-                channel.trigger(eventName: eventName, data: data)
-            default:
-                result(FlutterError(code: "TRIGGER_ERROR", message: errorMessage, details: nil))
+            let data = clientEvent.data ?? ""
+
+            guard channelName.hasPrefix(Self.PRIVATE_PREFIX) || channelName.hasPrefix(Self.PRESENCE_PREFIX) else {
+                result(FlutterError(code: "TRIGGER_ERROR", message: "Trigger can only be used on private or presence channels.", details: nil))
+                return
             }
-            
-            Utils.debugLog(msg: "[TRIGGER] \(eventName)")
+
+            if channelName.hasPrefix(Self.PRIVATE_ENCRYPTED_PREFIX) {
+                result(FlutterError(code: "TRIGGER_ERROR", message: "Cannot trigger on encrypted channels.", details: nil))
+                return
+            }
+
+            let channel = channelName.hasPrefix(Self.PRIVATE_PREFIX)
+                ? pusher.connection.channels.find(name: channelName)!
+                : pusher.connection.channels.findPresence(name: channelName)!
+
+            channel.trigger(eventName: eventName, data: data)
+            Logger.debug("[TRIGGER] \(eventName)")
             result(nil)
-        } catch let err {
-            Utils.errorLog(msg: err.localizedDescription)
-            result(FlutterError(code: "TRIGGER_ERROR", message: err.localizedDescription, details: err))
+        } catch {
+            Logger.error(error.localizedDescription)
+            result(FlutterError(code: "TRIGGER_ERROR", message: error.localizedDescription, details: error))
         }
-        
     }
 }
