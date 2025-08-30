@@ -2,7 +2,7 @@ group 'com.github.chinloyal.pusher_client'
 version '1.0-SNAPSHOT'
 
 buildscript {
-    ext.kotlin_version = '1.5.20'
+    ext.kotlin_version = '1.9.22'
     repositories {
         google()
         jcenter()
@@ -17,7 +17,7 @@ buildscript {
 rootProject.allprojects {
     repositories {
         google()
-        jcenter()
+        mavenCentral()
     }
 }
 
@@ -25,16 +25,26 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 android {
-    compileSdkVersion 29
     namespace 'com.github.chinloyal.pusher_client'
+    compileSdkVersion 35
+    
+
+     compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
-    }
     defaultConfig {
-        minSdkVersion 16
+        minSdkVersion 21
+        multiDexEnabled true
     }
     lintOptions {
         disable 'InvalidPackage'
@@ -47,4 +57,5 @@ android {
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.2.2'
 }
